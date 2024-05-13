@@ -68,7 +68,7 @@ class Client:
         if response.startswith("RTS_ERROR "):
             logging.error(response[10:])
             return
-        if response != "RTS_HELLO":
+        if response.startswith("RTS_HELLO"):
             raise ValueError("Server did not Respond with the expected RTS_HELLO message.")
         re_pub = r"pub=(.*);;"
         pub = re.search(re_pub, response)

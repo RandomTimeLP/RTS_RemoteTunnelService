@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='RTS_Tunnel',
-    version='0.1',
+    version='0.2',
     packages=find_packages(),
     description='Work in progress, a tunneling system for RTS_DataBase.',
     long_description=open('README.md').read(),
