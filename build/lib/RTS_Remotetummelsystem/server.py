@@ -8,12 +8,14 @@ import ssl
 from scapy.all import Raw
 from snowflake import Snowflake
 from ExtraUtils import RateLimiter
-import ExtraUtils.asyncTokens as asyncToken
+import ExtraUtils.timeBasedToken as tbt
 logging.basicConfig(level=logging.DEBUG,filename="server.log",format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class Server:
-    def __init__(self, host, port, token,use_ssl=False, ssl_cert=None, ssl_key=None):
+    def __init__(self, host, port, token,use_ssl=False, ssl_cert=None, ssl_key=None, primary= None,special=None):
+        if not primary or not special:
+            raise ValueError("Primary or special not set")
         self.node = None
         self.host = host
         self.port = port
@@ -22,13 +24,12 @@ class Server:
         self.ports_in_q = set()
         self.active = []
         self.active_requests = 0
+        self.TBT = tbt.TimeBasedToken(primary,special)
         self.ratelimit = RateLimiter(40,50,1,1)
         self.ssl_ports = [443,465,563,636,989,990,992,993,994,995,5061,8443,8531,9443,1194,1443,1443,18443,2443,4443,5443]
         self.prohibited_ports= [0,22,8888]
+        self.__recieved_goodbye = False
 
-        
-        self.key, self.pub = asyncToken.gen_keypair()
-        self.other_pub = None
         self.use_ssl = use_ssl
         if self.use_ssl:
             self.ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
@@ -49,6 +50,7 @@ class Server:
 
         while True:
             cli, addr = server.accept()
+
             self.active.append(cli)
 
             if not cli:
@@ -56,7 +58,9 @@ class Server:
             self.ratelimit.increment()
             if self.ratelimit.hit:
                 cli.close()
+            
             hello = cli.recv(512)
+            logging.debug(hello)
             ip, port = addr
             if self.node:
                 cli.send(b"RTS_ERROR Connection occupied.")
@@ -68,45 +72,44 @@ class Server:
                 logging.error(f"Connetion blocked, invalid Port using {ip}:{port}")
                 cli.close()
                 continue
-            if not hello.startswith(b"RTS_HELLO "):
-                cli.send("RTS_ERROR No RTS_HELLO message recieved.".encode())
+            self.TBT.regenerate()
+            hello = self.TBT.decrypt(hello)
+            if not hello.startswith("RTS_HELLO "):
+                answer = self.TBT.encrypt("RTS_ERROR No RTS_HELLO message recieved.")
+                cli.send(answer.encode())
                 logging.error("Did not recieved RTS_HELLO")
                 cli.close()
                 continue
-            hello = hello.decode()
-            message_str = hello.replace("RTS_HELLO ", "")
-            pairs = message_str.split(";;")
+            hello = hello[9:]
 
-            hi = {}
-            for pair in pairs:
-                key, value = pair.split("=")
-                if key in ["ports", "blocked"]:
-                    value = ast.literal_eval(value)
-                hi[key] = value
-            print(hi)
-            #if hi.get("pub"):
-            #    self.other_pub = asyncToken.load(hi.get("pub"))
+            hello = hello.split('=')[1]
+            hello = hello.strip('[]')
+            self.ports_in_q = [port.strip('"').strip("'") for port in hello.split(',')] 
 
             self.node = cli
-            self.ports_in_q = hi["ports"]
             logging.info(f"\nAccepted connection from: {ip}:{port}\n")
-            print(self.other_pub)
-            #hello_msg = asyncToken.encrypt(f"RTS_HELLO pub={asyncToken.serial(self.pub)};;",self.other_pub)
-            hello_msg = f"RTS_HELLO pub=None;;"
+            
+            hello_msg = self.TBT.encrypt("RTS_HELLO")
             cli.send(hello_msg.encode())
             self.setup_ports()
             while True:
                 cli.settimeout(None)
                 try:
                     read = cli.recv(1024).decode()
-                    #read = asyncToken.decrypt(read,self.key)
+                    read = self.TBT.decrypt(read)
                 except socket.error as ser:
                     logging.error(ser)
                     cli.close()
                     self.node = None
-                if read.startswith("RTS_GOODBY"):
+                except ValueError as err:
+                    logging.error(err)
+                    cli.close()
+                    self.node = None
                     self.shutdown()
-                    sys.exit(1)
+                if read.startswith("RTS_GOODBYE"):
+                    self.__recieved_goodbye = True
+                    self.shutdown()
+                    break
 
 
     def setup_ports(self):
@@ -148,12 +151,12 @@ class Server:
             if int(port) in self.ssl_ports:
                 try:
                     con = self.ssl_context.wrap_socket(con, server_side=True)
-                    #self.node.send(asyncToken.encrypt(f"RTS_PORTREG {port} as SSL",self.other_pub).encode())
-                    self.node.send(f"RTS_PORTREG {port} as SSL".encode())
+                    answ = self.TBT.encrypt("RTS_PORTREG {port} as SSL")
+                    self.node.send(answ.encode())
                 except ssl.SSLError as e:
                     logging.error(f"\n{add} caused an error: {e}\n")
-                    #self.node.send(asyncToken.encrypt(f"RTS_PORTREG {port} as SSL FAILED",self.other_pub).encode())
-                    self.node.send(f"RTS_PORTREG {port} as SSL FAILED".encode())
+                    answ = self.TBT.encrypt("RTS_ERROR {port} expected SSL connection")
+                    self.node.send(answ.encode())
                     con.close()
                     continue
 
@@ -171,15 +174,15 @@ class Server:
             logging.info(f"\n{pack.summary}\n")
 
             snow = Snowflake().generate_id()
-            send_msg = f"RTS_PUSH {port} ID {snow} RECIEVED {data}"
-            #end_msg = asyncToken.encrypt(send_msg,self.other_pub)  
+            send_msg = f"RTS_PUSH {port} ID {snow} RECIEVED {data}" 
+            send_msg = self.TBT.encrypt(send_msg)
             # RTS_RESPONSE {id} RETURNED
             logging.info(f"\n>>>OUTGOING source {add}\n{send_msg}\n")
             self.node.settimeout(5.0)
             self.node.send(send_msg.encode())
             try:
-                ret:bytes = self.node.recv(2048).decode()
-                #ret = asyncToken.decrypt(ret,self.key)
+                ret = self.node.recv(2048).decode()
+                ret = self.TBT.decrypt(ret)
             except socket.timeout:
                 logging.warning("Return message timed out\n")
                 con.close()
@@ -204,24 +207,25 @@ class Server:
             kill = 23+len(ident)
             ret:str = ret[kill:]
             logging.info(f"\n>>>OUTGOING\n{ret}\n")
-            con.sendall(ret.encode())
+            if ident == snow:
+                con.sendall(ret.encode())
+
+            if ret.startswith("RTS_END") or ret.startswith("RTS_ERROR"):
+                re_end_ident = r'RTS_END (\d+)'
+                if re.search(re_end_ident,ret).group(1) == snow:
+                    con.close()
+                    continue
+                continue
     
 
 
 
     def shutdown(self):
+        if not self.__recieved_goodbye:
+            goodbye = self.TBT.encrypt("RTS_GOODBYE")
+            self.node.send(goodbye.encode())
         for a in self.active:
             logging.info(f"closing connection {a}")
+            a.shutdown(socket.SHUT_RDWR)
             a.close()
-
-
-# Beispielverwendung
-#try:
-serv = Server('0.0.0.0', 8883, "token",True,"/etc/letsencrypt/live/randomtime.tv/fullchain.pem","/etc/letsencrypt/live/randomtime.tv/privkey.pem")
-serv.start_server()
-#except KeyboardInterrupt:
-#    logging.info("shuting down")
-#    serv.shutdown()
-#except Exception as e:
-#    logging.critical(e)
-#    serv.shutdown()
+            sys.exit(0)
