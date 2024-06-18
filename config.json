@@ -1,0 +1,18 @@
+{
+    "self":{
+        "key": "E:/Developement/RTS-Modules/RTS_RemoteTunnelService/self.key",
+        "pem": "E:/Developement/RTS-Modules/RTS_RemoteTunnelService/self.pem",
+        "whoami": "randomtime.tv"
+    },
+    "nodes":{
+        "servicenode1.randomtime.tv": {
+            "key": "E:/Developement/RTS-Modules/RTS_RemoteTunnelService/servicenode1.key",
+            "ports": ["443","25565"]
+        }
+    },
+
+    "25565": [
+        {"is_ssl_port":false, "blocks_hosts":[], "bypassing_hosts":[],"expected_protocol":"__any", "is_halted":false},
+        {"to_node":"servicenode1.randomtime.tv"}
+    ]
+}
