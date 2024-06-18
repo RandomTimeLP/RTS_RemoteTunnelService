@@ -385,26 +385,3 @@ class Node:
 
 
 
-config ={
-    "self":{
-        "key": "E:/Developement/RTS-Modules/RTS_RemoteTunnelService/self.key",
-        "pem": "E:/Developement/RTS-Modules/RTS_RemoteTunnelService/self.pem",
-        "whoami": "randomtime.tv"
-    },
-    "host":{
-        "key": "E:/Developement/RTS-Modules/RTS_RemoteTunnelService/host.key"
-    },
-
-
-    "25573": [
-        {"is_ssl_port":False, "blocks_hosts":[], "bypassing_hosts":[],"expected_protocol":"__any", "is_halted":False},
-        {"to_node":"servicenode1.randomtime.tv"}
-    ]
-}
-
-primary = "4h5j6k7m8n9p0q1r2s3t4u5v6w7x8y9z"
-special = "f1e2d3c4b5a6z7y8x9w0v1u2t3s4r5q6"
-server = Node(primary_token=primary, special_token=special)
-server.as_client_server("remote.randomtime.tv", 5431, config)
-server.connectivity_trust_level(3)
-server.setup_sequence()
